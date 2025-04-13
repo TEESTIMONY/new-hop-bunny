@@ -80,8 +80,55 @@ router.get('/', async (req, res) => {
     
     // Process the results
     const users = [];
+    
+    // For rank calculation, get all high scores if sorting by highScore
+    let userRanks = {};
+    if (sortBy === 'highScore' && sortDir === 'desc') {
+      // Ranks are already in order
+      let lastHighScore = Infinity;
+      let currentRank = 0;
+      
+      snapshot.forEach(doc => {
+        const userData = doc.data();
+        const highScore = userData.highScore || 0;
+        
+        // If this is a new score tier, increment the rank
+        if (highScore < lastHighScore) {
+          currentRank++;
+          lastHighScore = highScore;
+        }
+        
+        userRanks[doc.id] = currentRank;
+      });
+    }
+    
     snapshot.forEach(doc => {
       const userData = doc.data();
+      
+      // Determine rank from calculated ranks if available, or use stored rank
+      let rank = userData.rank;
+      
+      if (userRanks[doc.id]) {
+        rank = userRanks[doc.id];
+        
+        // Update rank in database if it's changed or not set
+        if (rank !== userData.rank) {
+          db.collection('users').doc(doc.id).update({ 
+            rank: rank,
+            updatedAt: new Date().toISOString()
+          }).catch(err => console.error('Error updating user rank:', err));
+        }
+      }
+
+      // If user doesn't have referralCount, add it to the document
+      if (userData.referralCount === undefined) {
+        console.log(`Adding missing referralCount field to user ${doc.id}`);
+        db.collection('users').doc(doc.id).update({
+          referralCount: 0,
+          updatedAt: new Date().toISOString()
+        }).catch(err => console.error('Error adding referralCount:', err));
+      }
+      
       users.push({
         uid: doc.id,
         email: userData.email,
@@ -91,6 +138,8 @@ router.get('/', async (req, res) => {
         highScore: userData.highScore || 0,
         lastGameScore: userData.lastGameScore || 0,
         gamesPlayed: userData.gamesPlayed || 0,
+        rank: rank || 999, // Default to a high rank if not calculated/stored
+        referralCount: userData.referralCount || 0, // Include referral count
         createdAt: formatTimestamp(userData.createdAt)
       });
     });

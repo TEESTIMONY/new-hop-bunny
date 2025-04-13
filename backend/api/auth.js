@@ -9,7 +9,13 @@ const { auth, db } = require('../config/firebase');
  */
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, username } = req.body;
+    const { email, password, username, referrerId, referrerUsername } = req.body;
+
+    console.log(`Registration attempt for ${username} (${email})`);
+    
+    if (referrerId) {
+      console.log(`Registration includes referral data: referrerId=${referrerId}, referrerUsername=${referrerUsername || 'not provided'}`);
+    }
 
     if (!email || !password || !username) {
       return res.status(400).json({ message: 'Please provide email, password, and username' });
@@ -27,6 +33,7 @@ router.post('/register', async (req, res) => {
       email,
       username,
       displayName: username,
+      score: 0,
       highScore: 0,
       createdAt: new Date().toISOString()
     });
@@ -34,16 +41,84 @@ router.post('/register', async (req, res) => {
     // Generate a custom token for the client
     const token = await auth.createCustomToken(userRecord.uid);
 
+    // Process referral if provided
+    let referralBonus = 0;
+    if (referrerId) {
+      try {
+        // Amount of points to award
+        const REFERRER_POINTS = 500;
+        const NEW_USER_POINTS = 200;
+
+        // Update referrer's points
+        const referrerRef = db.collection('users').doc(referrerId);
+        const referrerDoc = await referrerRef.get();
+        
+        if (referrerDoc.exists) {
+          const referrerData = referrerDoc.data();
+          console.log(`Processing referral: Referrer ${referrerData.username || referrerId} (current score: ${referrerData.score || 0}) will get ${REFERRER_POINTS} points`);
+          
+          await referrerRef.update({
+            score: (referrerData.score || 0) + REFERRER_POINTS,
+            referralBonus: (referrerData.referralBonus || 0) + REFERRER_POINTS
+          });
+          
+          console.log(`Updated referrer score: ${(referrerData.score || 0) + REFERRER_POINTS} (+${REFERRER_POINTS} points)`);
+          // Verify the update was successful by getting the updated document
+          const updatedReferrerDoc = await referrerRef.get();
+          const updatedReferrerData = updatedReferrerDoc.data();
+          console.log(`VERIFICATION - Referrer new score: ${updatedReferrerData.score}, Referral count: ${updatedReferrerData.referralCount}`);
+
+          // Update new user's points
+          const newUserRef = db.collection('users').doc(userRecord.uid);
+          const newUserDoc = await newUserRef.get();
+          const newUserData = newUserDoc.data();
+          
+          console.log(`New user ${username} (current score: ${newUserData.score || 0}) will get ${NEW_USER_POINTS} points`);
+          
+          await newUserRef.update({
+            score: (newUserData.score || 0) + NEW_USER_POINTS,
+            referralBonus: (newUserData.referralBonus || 0) + NEW_USER_POINTS
+          });
+          
+          console.log(`Updated new user score: ${(newUserData.score || 0) + NEW_USER_POINTS} (+${NEW_USER_POINTS} points)`);
+          // Verify the update was successful by getting the updated document
+          const updatedNewUserDoc = await newUserRef.get();
+          const updatedNewUserData = updatedNewUserDoc.data();
+          console.log(`VERIFICATION - New user score: ${updatedNewUserData.score}, Referral bonus: ${updatedNewUserData.referralBonus}`);
+
+          // Record the referral
+          await db.collection('referrals').add({
+            referrerId: referrerId,
+            referrerName: referrerData.username || referrerUsername,
+            newUserId: userRecord.uid,
+            newUserName: username,
+            referrerPointsAwarded: REFERRER_POINTS,
+            newUserPointsAwarded: NEW_USER_POINTS,
+            createdAt: new Date().toISOString()
+          });
+
+          referralBonus = NEW_USER_POINTS;
+          console.log(`Referral processed: ${referrerId} (awarded ${REFERRER_POINTS} pts) referred ${userRecord.uid} (awarded ${NEW_USER_POINTS} pts)`);
+        }
+      } catch (referralError) {
+        console.error('Error processing referral:', referralError);
+        // We continue registration process even if referral processing fails
+      }
+    }
+
     res.status(201).json({
       message: 'User registered successfully',
       token,
       userId: userRecord.uid,
+      referralBonus,
       user: {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName
       }
     });
+    
+    console.log(`Registration completed successfully for ${username}. Referral bonus: ${referralBonus}`);
   } catch (error) {
     console.error('Error registering user:', error);
     
@@ -95,11 +170,18 @@ router.post('/login', async (req, res) => {
       message: 'Login successful',
       token,
       userId: userRecord.uid,
+      score: userData?.score || 0,
+      highScore: userData?.highScore || 0,
+      referralCount: userData?.referralCount || 0,
+      referralBonus: userData?.referralBonus || 0,
       user: {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName || userData?.username,
-        highScore: userData?.highScore || 0
+        highScore: userData?.highScore || 0,
+        score: userData?.score || 0,
+        referralCount: userData?.referralCount || 0,
+        referralBonus: userData?.referralBonus || 0
       }
     });
   } catch (error) {

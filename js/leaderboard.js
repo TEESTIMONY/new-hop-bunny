@@ -300,8 +300,8 @@ async function loadLeaderboardData() {
             rowsContainer.appendChild(loadingIndicator);
         }
         
-        // Fetch data from API with sort parameters
-        const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.users}?sortBy=highScore&sortDir=desc&limit=400`, {
+        // Fetch data from API with sort parameters - CHANGED: Sort by score instead of highScore
+        const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.users}?sortBy=score&sortDir=desc&limit=400`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -327,15 +327,16 @@ async function loadLeaderboardData() {
             return {
                 userId: user.userId || user.uid || user._id || 'unknown',
                 username: user.username || user.displayName || 'Anonymous',
-                highScore: typeof user.highScore === 'number' ? user.score : 
-                           (typeof user.score === 'number' ? user.score : 0),
+                // FIXED: Use score instead of highScore as the primary field
+                score: typeof user.score === 'number' ? user.score : 
+                      (typeof user.highScore === 'number' ? user.highScore : 0),
                 gamesPlayed: user.gamesPlayed || 0,
                 createdAt: user.createdAt || new Date().toISOString()
             };
         });
         
-        // Double-check sorting (in case API doesn't sort properly)
-        const sortedUsers = validUsers.sort((a, b) => b.highScore - a.highScore);
+        // Double-check sorting (in case API doesn't sort properly) - CHANGED: sort by score instead of highScore
+        const sortedUsers = validUsers.sort((a, b) => b.score - a.score);
         
         // Display users in leaderboard
         displayLeaderboardData(sortedUsers);
@@ -370,7 +371,7 @@ function loadSampleUserData() {
             userId: "PCwtU7YgdQbw13r24rNHj0ix5Xx1",
             username: "Delo",
             email: "testimonyalade191@gmail.com",
-            highScore: 5357,
+            score: 5357,
             gamesPlayed: 8,
             createdAt: "2025-04-10T08:54:55.039Z"
         },
@@ -378,7 +379,7 @@ function loadSampleUserData() {
             userId: "jA8IwqYgdQbw13r24rNHj0ix5Xx2",
             username: "PepeHop",
             email: "pepe@example.com",
-            highScore: 3512,
+            score: 3512,
             gamesPlayed: 15,
             createdAt: "2025-04-11T10:25:12.039Z"
         },
@@ -386,7 +387,7 @@ function loadSampleUserData() {
             userId: "K9PrT7YgdQbw13r24rNHj0ix5Xx3",
             username: "BunnyMaster",
             email: "bunny@example.com",
-            highScore: 4756,
+            score: 4756,
             gamesPlayed: 23,
             createdAt: "2025-04-09T14:30:45.039Z"
         },
@@ -394,7 +395,7 @@ function loadSampleUserData() {
             userId: "M5QtW2YgdQbw13r24rNHj0ix5Xx4",
             username: "HopKing",
             email: "king@example.com",
-            highScore: 2421,
+            score: 2421,
             gamesPlayed: 12,
             createdAt: "2025-04-12T09:15:22.039Z"
         },
@@ -402,14 +403,14 @@ function loadSampleUserData() {
             userId: "N7RsX4YgdQbw13r24rNHj0ix5Xx5",
             username: "JumpQueen",
             email: "queen@example.com",
-            highScore: 3689,
+            score: 3689,
             gamesPlayed: 19,
             createdAt: "2025-04-08T11:45:33.039Z"
         }
     ];
     
-    // Sort by high score descending
-    const sortedUsers = sampleUsers.sort((a, b) => b.highScore - a.highScore);
+    // Sort by score descending
+    const sortedUsers = sampleUsers.sort((a, b) => b.score - a.score);
     
     // Display users in leaderboard
     displayLeaderboardData(sortedUsers);
@@ -477,7 +478,7 @@ function displayLeaderboardData(users) {
         row.innerHTML = `
             <div class="rank">${rankDisplay}</div>
             <div class="player">${playerDisplay}</div>
-            <div class="score">${formatNumber(user.highScore)}</div>
+            <div class="score">${formatNumber(user.score)}</div>
         `;
         
         // Add hover state and cursor pointer to show it's clickable
@@ -604,7 +605,7 @@ function animateLeaderboardRows() {
  */
 function loadUserInfo() {
     // Get user info from localStorage or sessionStorage (same approach as auth-checker.js)
-    const username = localStorage.getItem('username') || sessionStorage.getItem('username');
+    let username = localStorage.getItem('username') || sessionStorage.getItem('username');
     const userId = localStorage.getItem('userId') || sessionStorage.getItem('userId');
     const score = localStorage.getItem('highScore') || sessionStorage.getItem('highScore') || 0;
     
@@ -613,9 +614,46 @@ function loadUserInfo() {
     const currentUserScoreElement = document.getElementById('currentUserScore');
     
     if (username) {
-        // Use the actual username from auth
-        currentUsernameElement.textContent = username;
+        // Check if the username looks like an email (contains @)
+        const isEmail = username.includes('@');
+        
+        // Temporarily set username to email prefix or stored username
+        currentUsernameElement.textContent = isEmail ? username.split('@')[0] : username;
         currentUserScoreElement.textContent = formatNumber(score);
+        
+        // If we have a userId, try to fetch the latest data including proper username
+        if (userId) {
+            // Fetch user data from API to get proper username
+            fetch(`${API_BASE_URL}/user/${userId}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to fetch user data');
+                return response.json();
+            })
+            .then(data => {
+                console.log('User data fetched for header:', data);
+                
+                // Use the proper display name or username from the API
+                if (data.displayName || data.username) {
+                    const properUsername = data.displayName || data.username;
+                    console.log('Using proper username from API:', properUsername);
+                    currentUsernameElement.textContent = properUsername;
+                    
+                    // Update localStorage and sessionStorage with the proper username
+                    localStorage.setItem('username', properUsername);
+                    sessionStorage.setItem('username', properUsername);
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching user data for header:', error);
+                // Keep using the default username if API fetch fails
+            });
+        }
     } else {
         // If no username found, use a placeholder (this should rarely happen since auth is required)
         currentUsernameElement.textContent = "Guest Player";

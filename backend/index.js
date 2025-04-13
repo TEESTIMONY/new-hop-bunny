@@ -24,6 +24,8 @@ app.use('/api/auth', require('./api/auth'));
 app.use('/api/user', require('./api/user'));
 app.use('/api/users', require('./api/users'));
 app.use('/api/update-score', require('./api/update-score'));
+app.use('/api/referral', require('./api/referral'));
+app.use('/api/update-users', require('./api/update-users'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

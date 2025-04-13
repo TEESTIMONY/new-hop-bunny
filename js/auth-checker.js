@@ -28,42 +28,86 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to display username in top right corner
     function displayUsername() {
-        // First try to get username directly
-        let username = localStorage.getItem('username') || sessionStorage.getItem('username');
+        // Get user ID from storage
         const userId = localStorage.getItem('userId') || sessionStorage.getItem('userId');
+        const token = localStorage.getItem('token') || sessionStorage.getItem('token');
         
-        console.log('User data from storage:', {
-            username: username,
-            userId: userId,
-            localStorageUsername: localStorage.getItem('username'),
-            sessionStorageUsername: sessionStorage.getItem('username')
-        });
-        
-        // If username is undefined/null but we have userId
-        if ((!username || username === 'undefined') && userId) {
-            console.log(`Username not found, but userId exists: ${userId}`);
+        if (userId && token) {
+            // API URL - Using the backend URL
+            const API_BASE_URL = 'https://new-backend-hop.vercel.app';
             
-            // Try to set a temporary display name based on userId
-            username = `User-${userId.substring(0, 5)}`;
+            // Fetch user data from the database
+            fetch(`${API_BASE_URL}/api/user/${userId}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to fetch user data');
+                }
+                return response.json();
+            })
+            .then(userData => {
+                let username = userData.username || userData.displayName;
+                
+                // If we have valid username from the database, update storage
+                if (username) {
+                    console.log('Username fetched from database:', username);
+                    
+                    // Update the username in storage for other pages
+                    if (localStorage.getItem('token')) {
+                        localStorage.setItem('username', username);
+                    } else {
+                        sessionStorage.setItem('username', username);
+                    }
+                } else {
+                    // Fall back to stored username if database didn't return it
+                    username = localStorage.getItem('username') || sessionStorage.getItem('username');
+                }
+                
+                // If still no username, generate one based on userId
+                if (!username || username === 'undefined') {
+                    username = `User-${userId.substring(0, 5)}`;
+                    console.log(`Generated temporary username from userId: ${username}`);
+                }
+                
+                // Create and display the username element
+                displayUsernameElement(username);
+            })
+            .catch(error => {
+                console.error('Error fetching user data:', error);
+                
+                // Fall back to stored username on error
+                let username = localStorage.getItem('username') || sessionStorage.getItem('username');
+                
+                // If still no username, generate one based on userId
+                if (!username || username === 'undefined') {
+                    username = `User-${userId.substring(0, 5)}`;
+                    console.log(`Error fetching username, using generated: ${username}`);
+                }
+                
+                // Create and display the username element
+                displayUsernameElement(username);
+            });
+        } else {
+            // If no userId or token, use stored username or Guest Player
+            let username = localStorage.getItem('username') || sessionStorage.getItem('username');
             
-            // Store this temp username so it persists
-            if (localStorage.getItem('token')) {
-                localStorage.setItem('username', username);
-            } else {
-                sessionStorage.setItem('username', username);
+            if (!username || username === 'undefined') {
+                username = 'Guest Player';
+                console.log('No userId or token found, using "Guest Player"');
             }
             
-            console.log(`Set temporary username: ${username}`);
+            // Create and display the username element
+            displayUsernameElement(username);
         }
-        
-        // If we still don't have a username, use "Guest"
-        if (!username || username === 'undefined') {
-            username = 'Guest Player';
-            console.log('No username or userId found, using "Guest Player"');
-        }
-        
-        console.log(`Final username to display: ${username}`);
-        
+    }
+    
+    // Helper function to create and display the username element
+    function displayUsernameElement(username) {
         // Remove any existing username display first
         const existingDisplay = document.querySelector('.username-display');
         if (existingDisplay && existingDisplay.parentNode) {
@@ -72,7 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Create username element for the top right corner
         const usernameElement = document.createElement('div');
-        usernameElement.classList.add('username-display', 'top-right');
+        usernameElement.classList.add('username-display', 'top-right', 'user-display-name');
         usernameElement.innerHTML = `<i class="fas fa-user"></i> ${username}`;
         
         // Add directly to body for highest z-index and positioning
@@ -167,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             try {
                 // Decode the referral code
-                const decodedRef = atob(referralCode);
+                const decodedRef = decodeURIComponent(atob(referralCode));
                 const [referrerId, referrerUsername] = decodedRef.split(':');
                 
                 // Store referral info in sessionStorage

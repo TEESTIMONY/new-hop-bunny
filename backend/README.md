@@ -61,20 +61,65 @@ The server will run on `http://localhost:3000` by default.
 
 ## API Endpoints
 
+### User Management
+
+- `GET /api/user/:userId` - Get user details
+  - Returns user information including username, scores, and rank
+  - Response includes: `uid`, `email`, `username`, `displayName`, `score`, `highScore`, `lastGameScore`, `gamesPlayed`, `rank`, `createdAt`
+
+- `PUT /api/user/:userId` - Update user information
+  - Requires authentication token
+  - Request body: `{ displayName, username }`
+  - Only the owner of the account can update their information
+
+### Score Management
+
+- `POST /api/update-score` - Update a user's score
+  - Request body: `{ userId, score }`
+  - Increments user's cumulative score and updates high score if applicable
+  - Calculates and updates user's rank based on high score
+  - Response includes: `previousScore`, `addedScore`, `totalScore`, `highestSingleGameScore`, `gamesPlayed`, `rank`
+
+### User Listing
+
+- `GET /api/users` - Get a list of all users with pagination
+  - Query parameters: 
+    - `limit` (default: 10) - Number of users to retrieve
+    - `offset` (default: 0) - Starting point for pagination
+    - `sortBy` (default: 'createdAt') - Field to sort by (e.g., 'highScore', 'createdAt')
+    - `sortDir` (default: 'desc') - Sort direction ('asc' or 'desc')
+    - `username` - Filter users by username
+  - Returns a paginated list of users with their ranks
+  - Each user includes: `uid`, `email`, `username`, `displayName`, `score`, `highScore`, `lastGameScore`, `gamesPlayed`, `rank`, `createdAt`
+
 ### Authentication
 
 - `POST /api/auth/register` - Register a new user
-- `POST /api/auth/login` - Login an existing user
-- `POST /api/auth/verify-token` - Verify a Firebase token
+  - Request body: `{ email, password, username }`
 
-### User
+- `POST /api/auth/login` - Login a user
+  - Request body: `{ email, password }`
+  - Returns user info and authentication token
 
-- `GET /api/user/:userId` - Get user data
-- `PUT /api/user/:userId` - Update user data
+## User Ranking System
 
-### Score
+The application now includes a ranking system that:
 
-- `POST /api/update-score` - Update user's high score
+1. Automatically calculates user ranks based on high scores
+2. Stores the rank in the user's document for efficient retrieval
+3. Updates ranks whenever scores change
+4. Returns rank information in all relevant API responses
+
+Ranks work as follows:
+- Users with the same high score receive the same rank
+- Ranks are consecutive (1, 2, 3, etc.) even when multiple users share a rank
+- Lower rank numbers are better (1 is the top rank)
+- Ranks are updated in real-time when scores change
+
+To update ranks for all existing users at once, run:
+```
+node update-ranks.js
+```
 
 ## Security
 

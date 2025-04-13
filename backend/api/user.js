@@ -57,6 +57,40 @@ router.get('/:userId', async (req, res) => {
     
     const userData = userDoc.data();
     
+    // Get user rank if stored, or calculate it if not available
+    let userRank = userData.rank;
+    
+    if (userRank === undefined) {
+      // Get all users sorted by highScore in descending order for rank calculation
+      const usersSnapshot = await db.collection('users')
+        .orderBy('highScore', 'desc')
+        .get();
+      
+      let lastHighScore = Infinity;
+      let currentRank = 0;
+      
+      // Iterate through users to determine rank
+      usersSnapshot.forEach(doc => {
+        const user = doc.data();
+        // If this is a new score tier, increment the rank
+        if (user.highScore < lastHighScore) {
+          currentRank++;
+          lastHighScore = user.highScore;
+        }
+        
+        // If this is our user, save their rank
+        if (doc.id === userId) {
+          userRank = currentRank;
+        }
+      });
+      
+      // Update the user's rank in database for future queries
+      await db.collection('users').doc(userId).update({ 
+        rank: userRank,
+        updatedAt: new Date().toISOString()
+      });
+    }
+    
     res.status(200).json({
       uid: userRecord.uid,
       email: userRecord.email,
@@ -66,6 +100,9 @@ router.get('/:userId', async (req, res) => {
       highScore: userData.highScore || 0,
       lastGameScore: userData.lastGameScore || 0,
       gamesPlayed: userData.gamesPlayed || 0,
+      rank: userRank || 999, // Default to a high rank if calculation failed
+      referralCount: userData.referralCount || 0, // Include referral count
+      referralBonus: userData.referralBonus || 0, // Include referral bonus points
       createdAt: formatTimestamp(userData.createdAt)
     });
     
@@ -139,6 +176,8 @@ router.put('/:userId', verifyToken, async (req, res) => {
         highScore: userData.highScore || 0,
         lastGameScore: userData.lastGameScore || 0,
         gamesPlayed: userData.gamesPlayed || 0,
+        referralCount: userData.referralCount || 0,
+        referralBonus: userData.referralBonus || 0,
         createdAt: formatTimestamp(userData.createdAt)
       }
     });

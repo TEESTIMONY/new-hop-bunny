@@ -126,32 +126,88 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.message || 'Login failed');
             }
 
-            // Extract username from response, checking all possible locations
-            const username = data.username || 
-                             (data.user && data.user.displayName) || 
-                             (data.user && data.user.username) || 
-                             email.split('@')[0]; // Fallback to email username part
+            // Extract token and user ID from response
+            const token = data.token;
+            const userId = data.userId;
             
-            console.log('Login successful. Username extracted:', username);
-
-            // Store user data in localStorage or sessionStorage based on "remember me"
+            // First, save these essential items
             if (rememberMe.checked) {
-                localStorage.setItem('token', data.token);
-                localStorage.setItem('userId', data.userId || (data.user && data.user.uid));
-                localStorage.setItem('username', username);
-                localStorage.setItem('highScore', data.highScore || (data.user && data.user.highScore) || 0);
-                localStorage.setItem('referralCount', data.referralCount || 0);
-                localStorage.setItem('referralBonus', data.referralBonus || 0);
+                localStorage.setItem('token', token);
+                localStorage.setItem('userId', userId);
+                localStorage.setItem('highScore', data.highScore || '0');
+                localStorage.setItem('score', data.score || '0');
+                localStorage.setItem('referralCount', data.referralCount || '0');
+                localStorage.setItem('referralBonus', data.referralBonus || '0');
             } else {
-                sessionStorage.setItem('token', data.token);
-                sessionStorage.setItem('userId', data.userId || (data.user && data.user.uid));
-                sessionStorage.setItem('username', username);
-                sessionStorage.setItem('highScore', data.highScore || (data.user && data.user.highScore) || 0);
-                sessionStorage.setItem('referralCount', data.referralCount || 0);
-                sessionStorage.setItem('referralBonus', data.referralBonus || 0);
+                sessionStorage.setItem('token', token);
+                sessionStorage.setItem('userId', userId);
+                sessionStorage.setItem('highScore', data.highScore || '0');
+                sessionStorage.setItem('score', data.score || '0');
+                sessionStorage.setItem('referralCount', data.referralCount || '0');
+                sessionStorage.setItem('referralBonus', data.referralBonus || '0');
+            }
+            
+            // Now fetch the latest user data from the database to ensure we have the correct username
+            try {
+                const userDataResponse = await fetch(`${API_BASE_URL}/api/user/${userId}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (userDataResponse.ok) {
+                    const userData = await userDataResponse.json();
+                    const username = userData.username || userData.displayName;
+                    
+                    // Store the username from database
+                    if (username) {
+                        if (rememberMe.checked) {
+                            localStorage.setItem('username', username);
+                        } else {
+                            sessionStorage.setItem('username', username);
+                        }
+                        console.log('Username fetched from database after login:', username);
+                    }
+                } else {
+                    // If API call fails, fall back to the username from login response
+                    const fallbackUsername = data.username || 
+                                             (data.user && data.user.displayName) || 
+                                             (data.user && data.user.username) || 
+                                             email.split('@')[0];
+                                             
+                    if (rememberMe.checked) {
+                        localStorage.setItem('username', fallbackUsername);
+                    } else {
+                        sessionStorage.setItem('username', fallbackUsername);
+                    }
+                    console.warn('Could not fetch username from database, using fallback:', fallbackUsername);
+                }
+            } catch (fetchError) {
+                console.error('Error fetching user data after login:', fetchError);
+                // Fall back to username from login response
+                const fallbackUsername = data.username || 
+                                         (data.user && data.user.displayName) || 
+                                         (data.user && data.user.username) || 
+                                         email.split('@')[0];
+                                         
+                if (rememberMe.checked) {
+                    localStorage.setItem('username', fallbackUsername);
+                } else {
+                    sessionStorage.setItem('username', fallbackUsername);
+                }
+                console.warn('Could not fetch username from database, using fallback:', fallbackUsername);
             }
 
+            // Flag to force a fresh fetch when visiting the profile page
+            sessionStorage.setItem('forceProfileRefresh', 'true');
+
             // Check for new referral bonuses
+            const username = rememberMe.checked ? 
+                              localStorage.getItem('username') : 
+                              sessionStorage.getItem('username');
+            
             let welcomeMessage = `Login successful! Welcome, ${username}!`;
             if (data.newReferralBonus) {
                 welcomeMessage += ` You've earned ${data.newReferralBonus} bonus points from ${data.newReferrals || 'new'} referrals since your last login!`;
@@ -197,6 +253,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 registrationData.referrerId = referrerId;
                 registrationData.referrerUsername = referrerUsername;
                 console.log(`Including referral data: Referred by ${referrerUsername} (${referrerId})`);
+                console.log('Registration payload with referral:', JSON.stringify(registrationData));
+            } else if (referrerId) {
+                // If we only have referrer ID without username
+                registrationData.referrerId = referrerId;
+                console.log(`Including referral data with ID only: Referred by ID ${referrerId}`);
+                console.log('Registration payload with referral ID only:', JSON.stringify(registrationData));
             }
             
             if (isDevelopment && false) { // Set to false to always use the real API
@@ -219,6 +281,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.message || 'Registration failed');
             }
             
+            // Log the complete response data
+            console.log('Registration response from server:', JSON.stringify(data));
+            
             // Save the username in session storage for use after login
             sessionStorage.setItem('registeredUsername', username);
             sessionStorage.setItem('userId', data.userId || (data.user && data.user.uid));
@@ -226,38 +291,128 @@ document.addEventListener('DOMContentLoaded', () => {
             
             console.log('Registration successful. Username saved:', username);
 
+            // Flag to track if we've processed the referral
+            let referralProcessed = false;
+
             // If registration was successful and there was a referral, update the referral count
-            if (referrerId && referrerUsername) {
+            if (referrerId && !referralProcessed && data.userId) {
                 try {
-                    // Call the referral count API to update the referrer's stats
-                    const response = await fetch('https://new-backend-hop.vercel.app/api/referalcount', {
+                    referralProcessed = true; // Mark as processed
+                    
+                    // Store a flag to prevent duplicate referral bonus processing
+                    const referralProcessKey = `ref_${data.userId}_${referrerId}`;
+                    if (localStorage.getItem(referralProcessKey)) {
+                        console.log('Referral bonus already processed. Skipping.', referralProcessKey);
+                        return;
+                    }
+                    
+                    // Set flag to indicate this referral has been processed
+                    localStorage.setItem(referralProcessKey, 'true');
+                    
+                    const hasUsername = !!referrerUsername;
+                    console.log(`Referral registered: ${username} was referred by ${hasUsername ? referrerUsername : 'ID ' + referrerId}`);
+                    
+                    // Make the update-score API call to add points to both users
+                    const updateScoreUrl = 'https://new-backend-hop.vercel.app/api/update-score';
+                    
+                    // Add a unique request identifier to prevent duplicate processing
+                    const uniqueRequestId = `reg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+                    console.log('Using unique request ID to prevent duplicate processing:', uniqueRequestId);
+                    
+                    // First update the referrer's score
+                    fetch(updateScoreUrl, {
                         method: 'POST',
                         headers: {
-                          'Content-Type': 'application/json'
+                            'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                          referrerId: referrerId,           // Firebase user ID of the referrer
-                          referredUsername: username // Username of the newly registered user (the one who just registered)
+                            userId: referrerId,
+                            score: 0,  // 500 points for the referrer
+                            isReferral: true,  // Flag to indicate this is a referral bonus
+                            incrementReferralCount: true,  // Add this to increment the referral count
+                            uniqueRequestId: uniqueRequestId // Add a unique request ID to prevent duplicate processing
                         })
-                      });
-                    
-                    const referralData = await response.json();
-                    
-                    if (response.ok) {
-                        console.log(`Referral count updated for ${referrerUsername}. New count: ${referralData.newCount}`);
-                    } else {
-                        console.error('Failed to update referral count:', referralData.message);
-                    }
+                    })
+                    .then(response => response.json())
+                    .then(referrerData => {
+                        // Check if the request was identified as a duplicate
+                        if (referrerData.isDuplicate) {
+                            console.warn('Duplicate referral bonus request detected and prevented by server');
+                            return Promise.reject(new Error('Duplicate request'));
+                        }
+                        
+                        console.log('Referrer score update successful:', referrerData);
+                        console.log('Referrer referralCount before:', (referrerData.previousReferralCount || 0));
+                        console.log('Referrer referralCount after:', referrerData.referralCount);
+                        
+                        // Then update the new user's score using the correct userId
+                        const newUserId = sessionStorage.getItem('userId'); // Get the new user's ID from session storage
+                        console.log('Updating new user score with ID:', newUserId);
+                        
+                        // Use a different unique ID for the referred user
+                        const referredUniqueId = `${uniqueRequestId}_referred`;
+                        
+                        return fetch(updateScoreUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                userId: newUserId,
+                                score: 0,  // 200 points for the new user
+                                isReferral: true,  // Flag to indicate this is a referral bonus
+                                uniqueRequestId: referredUniqueId // Add a unique request ID to prevent duplicate processing
+                            })
+                        });
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Check if the request was identified as a duplicate
+                        if (data.isDuplicate) {
+                            console.warn('Duplicate referred user bonus request detected and prevented by server');
+                            return;
+                        }
+                        
+                        console.log('New user score update successful:', data);
+                        // Verify that game stats are not affected
+                        if (data.highestSingleGameScore > 0) {
+                            console.warn('Warning: highestSingleGameScore should be 0 for referral bonuses');
+                            data.highestSingleGameScore = 0;
+                        }
+                        if (data.gamesPlayed !== (data.previousGamesPlayed || 0)) {
+                            console.warn('Warning: gamesPlayed was incremented for a referral bonus');
+                            data.gamesPlayed = 0;
+                        }
+                        
+                        // Show the referral bonus notification
+                        showReferralBonusNotification(500, 200);
+                        
+                        // Clear the referral data after successful processing
+                        sessionStorage.removeItem('referrerId');
+                        sessionStorage.removeItem('referrerUsername');
+                    })
+                    .catch(error => {
+                        if (error.message === 'Duplicate request') {
+                            console.log('Skipping duplicate referral bonus processing');
+                        } else {
+                            console.error('Error updating scores:', error);
+                            
+                            // Even if there's an error, we should clear the referral data 
+                            // to prevent repeated attempts that might eventually succeed
+                            sessionStorage.removeItem('referrerId');
+                            sessionStorage.removeItem('referrerUsername');
+                        }
+                    });
                 } catch (referralError) {
                     // Log the error but don't interrupt the registration flow
-                    console.error('Error updating referral count:', referralError);
+                    console.error('Error with referral:', referralError);
                 }
             }
 
             // Handle referral bonus display if applicable
             let successMessage = data.message || 'Registration successful! You can now log in.';
             if (referrerId && data.referralBonus) {
-                successMessage += ` You received a ${data.referralBonus} point bonus from ${referrerUsername}'s referral!`;
+                successMessage += ` You received a ${data.referralBonus} point bonus from your referral!`;
                 
                 // Clear the referral data after successful use
                 sessionStorage.removeItem('referrerId');
@@ -379,8 +534,190 @@ document.addEventListener('DOMContentLoaded', () => {
             return true; // Already authenticated but we'll handle this differently
         }
         
-        // Return true if authenticated, false otherwise
-        return !!(tokenFromStorage || tokenFromSession);
+        // If authenticated, fetch the username from the database
+        if (tokenFromStorage || tokenFromSession) {
+            const userId = localStorage.getItem('userId') || sessionStorage.getItem('userId');
+            if (userId) {
+                // Fetch user data from the database
+                fetchUserDataFromDB(userId);
+            }
+            return true;
+        }
+        
+        // Return false if not authenticated
+        return false;
+    }
+    
+    // Function to fetch user data from the database
+    async function fetchUserDataFromDB(userId) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/user/${userId}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch user data');
+            }
+            
+            const userData = await response.json();
+            
+            // Update the username in storage with the one from the database
+            const username = userData.username || userData.displayName;
+            if (username) {
+                if (localStorage.getItem('token')) {
+                    localStorage.setItem('username', username);
+                } else {
+                    sessionStorage.setItem('username', username);
+                }
+                console.log('Username fetched from database:', username);
+            }
+        } catch (error) {
+            console.error('Error fetching user data:', error);
+        }
+    }
+
+    // Add a new function for flash notifications above the showSuccess function
+    // Flash notification for referral bonuses
+    function showReferralBonusNotification(referrerPoints, newUserPoints) {
+        // Create notification element
+        const notification = document.createElement('div');
+        notification.className = 'referral-bonus-notification';
+        
+        // Set content based on points awarded
+        notification.innerHTML = `
+            <div class="notification-icon"><i class="fas fa-gift"></i></div>
+            <div class="notification-content">
+                <div class="notification-title">Referral Bonus!</div>
+                <div class="notification-message">
+                    <p>You received ${newUserPoints} points for signing up with a referral!</p>
+                    <p>Your referrer received ${referrerPoints} points!</p>
+                </div>
+            </div>
+            <div class="notification-close"><i class="fas fa-times"></i></div>
+        `;
+        
+        // Add styles if they don't exist yet
+        if (!document.getElementById('referral-notification-styles')) {
+            const style = document.createElement('style');
+            style.id = 'referral-notification-styles';
+            style.textContent = `
+                .referral-bonus-notification {
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: linear-gradient(135deg, #2ecc71, #27ae60);
+                    color: white;
+                    border-radius: 10px;
+                    padding: 15px;
+                    display: flex;
+                    align-items: center;
+                    max-width: 350px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                    z-index: 9999;
+                    animation: slideInNotif 0.5s ease forwards;
+                }
+                
+                .referral-bonus-notification.hiding {
+                    animation: slideOutNotif 0.3s ease forwards;
+                }
+                
+                .notification-icon {
+                    font-size: 24px;
+                    margin-right: 15px;
+                    background: rgba(255, 255, 255, 0.2);
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                
+                .notification-content {
+                    flex: 1;
+                }
+                
+                .notification-title {
+                    font-weight: 700;
+                    font-size: 16px;
+                    margin-bottom: 5px;
+                }
+                
+                .notification-message {
+                    font-size: 14px;
+                    opacity: 0.9;
+                }
+                
+                .notification-message p {
+                    margin: 5px 0;
+                }
+                
+                .notification-close {
+                    cursor: pointer;
+                    padding: 5px;
+                    margin-left: 10px;
+                    opacity: 0.7;
+                    transition: opacity 0.2s ease;
+                }
+                
+                .notification-close:hover {
+                    opacity: 1;
+                }
+                
+                @keyframes slideInNotif {
+                    from {
+                        transform: translateX(120%);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                }
+                
+                @keyframes slideOutNotif {
+                    from {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                    to {
+                        transform: translateX(120%);
+                        opacity: 0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Add to body
+        document.body.appendChild(notification);
+        
+        // Add close button functionality
+        const closeButton = notification.querySelector('.notification-close');
+        if (closeButton) {
+            closeButton.addEventListener('click', () => {
+                notification.classList.add('hiding');
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            });
+        }
+        
+        // Auto-hide after 6 seconds
+        setTimeout(() => {
+            notification.classList.add('hiding');
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, 6000);
     }
 
     // Success message function
@@ -446,4 +783,58 @@ document.addEventListener('DOMContentLoaded', () => {
         particle.style.animationDuration = `${duration}s`;
         particle.style.animationDelay = `${delay}s`;
     });
-}); 
+
+    // Add the updateUsernameFromDatabase function that can be called from outside
+    function updateUsernameFromDatabase() {
+        const userId = localStorage.getItem('userId') || sessionStorage.getItem('userId');
+        const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+        
+        if (userId && token) {
+            fetch(`${API_BASE_URL}/api/user/${userId}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to fetch user data');
+                }
+                return response.json();
+            })
+            .then(userData => {
+                const username = userData.username || userData.displayName;
+                if (username) {
+                    // Update the username in storage
+                    if (localStorage.getItem('token')) {
+                        localStorage.setItem('username', username);
+                    } else {
+                        sessionStorage.setItem('username', username);
+                    }
+                    
+                    // Update any UI elements displaying the username
+                    const usernameDisplayElements = document.querySelectorAll('.user-display-name');
+                    usernameDisplayElements.forEach(element => {
+                        element.textContent = username;
+                    });
+                    
+                    console.log('Username updated from database:', username);
+                }
+            })
+            .catch(error => {
+                console.error('Error updating username from database:', error);
+            });
+        }
+    }
+
+    // Expose the function to the global scope so it can be called from other scripts
+    window.updateUsernameFromDatabase = updateUsernameFromDatabase;
+});
+
+// Export the updateUsernameFromDatabase function
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        updateUsernameFromDatabase: window.updateUsernameFromDatabase
+    };
+} 
